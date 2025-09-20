@@ -166,7 +166,6 @@ int main() {
   }
 
   kill(pid, SIGTERM);
-  waitpid(pid, NULL, 0);
   clean_up(&term);
 
   return 0;
