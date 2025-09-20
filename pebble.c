@@ -26,6 +26,23 @@ void handle_sigint(int sig) {
   running = 0;
 }
 
+XRenderColor hex_to_xrender_color(const char *hex) {
+  XRenderColor xrcolor = {0, 0, 0, 0xffff};
+
+  if (hex[0] == '#') {
+    hex++;
+  }
+  
+  unsigned int r, g, b;
+  sscanf(hex, "%2x%2x%2x", &r, &g, &b); 
+
+  xrcolor.red = r * 257;
+  xrcolor.green = g * 257;
+  xrcolor.blue = b * 257;
+
+  return xrcolor;
+}
+
 Terminal create_terminal() {
   // init window
   Terminal term;
@@ -39,7 +56,7 @@ Terminal create_terminal() {
   term.colormap = DefaultColormap(term.dpy, term.scr);
   term.win = XCreateSimpleWindow(term.dpy, DefaultRootWindow(term.dpy),
             0, 0, 800, 450, 0,
-            BlackPixel(term.dpy, term.scr), BlackPixel(term.dpy, term.scr));
+            BlackPixel(term.dpy, term.scr), 0x1e1e2e);
   XStoreName(term.dpy, term.win, "pebble");
   XSelectInput(term.dpy, term.win, ExposureMask | KeyPressMask);
   XMapWindow(term.dpy, term.win);
@@ -47,7 +64,7 @@ Terminal create_terminal() {
   // init xft
   term.draw = XftDrawCreate(term.dpy, term.win, term.visual, term.colormap);
   term.font = XftFontOpenName(term.dpy, term.scr, "CaskaydiaMono Nerd Font:size=20");
-  XRenderColor xrcolor = { 0xffff, 0xffff, 0xffff, 0xffff };
+  XRenderColor xrcolor = hex_to_xrender_color("#cdd6f4");
   XftColorAllocValue(term.dpy, term.visual, term.colormap, &xrcolor, &term.color);
 
   return term;
