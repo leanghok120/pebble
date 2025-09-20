@@ -142,7 +142,7 @@ int main() {
     }
 
     if (FD_ISSET(master_fd, &fds)) {
-      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen - 1);
+      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen + 1);
       if (n > 0) {
         buflen += n;
         buf[buflen] = '\0';
