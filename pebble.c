@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <pty.h>
+#include "config.h"
 
 typedef struct {
   Display *dpy;
@@ -60,15 +61,15 @@ Terminal create_terminal() {
   term.colormap = DefaultColormap(term.dpy, term.scr);
   term.win = XCreateSimpleWindow(term.dpy, DefaultRootWindow(term.dpy),
       0, 0, 800, 450, 0,
-      BlackPixel(term.dpy, term.scr), 0x1e1e2e);
+      BlackPixel(term.dpy, term.scr), strtol(background + 1, NULL, 16));
   XStoreName(term.dpy, term.win, "pebble");
   XSelectInput(term.dpy, term.win, ExposureMask | KeyPressMask);
   XMapWindow(term.dpy, term.win);
 
   // init xft
   term.draw = XftDrawCreate(term.dpy, term.win, term.visual, term.colormap);
-  term.font = XftFontOpenName(term.dpy, term.scr, "CaskaydiaMono Nerd Font:size=20");
-  XRenderColor xrcolor = hex_to_xrender_color("#cdd6f4");
+  term.font = XftFontOpenName(term.dpy, term.scr, font_name);
+  XRenderColor xrcolor = hex_to_xrender_color(foreground);
   XftColorAllocValue(term.dpy, term.visual, term.colormap, &xrcolor, &term.color);
 
   return term;
