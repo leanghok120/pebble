@@ -92,7 +92,8 @@ int main() {
   int master_fd;
   int pid = forkpty(&master_fd, NULL, NULL, NULL);
   if (pid == 0) {
-    execlp("/bin/cozsh", "cozsh", NULL);
+    char *shell = getenv("SHELL");
+    execlp(shell, shell, NULL);
     perror("execlp");
     _exit(1);
   }
