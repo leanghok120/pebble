@@ -94,6 +94,9 @@ int main() {
   int pid = forkpty(&master_fd, NULL, NULL, NULL);
   if (pid == 0) {
     char *shell = getenv("SHELL");
+    if (shell == NULL) {
+      shell = "/bin/sh";
+    }
     execlp(shell, shell, NULL);
     perror("execlp");
     _exit(1);
@@ -142,7 +145,7 @@ int main() {
     }
 
     if (FD_ISSET(master_fd, &fds)) {
-      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen + 1);
+      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen - 1);
       if (n > 0) {
         buflen += n;
         buf[buflen] = '\0';
