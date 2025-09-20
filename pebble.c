@@ -142,15 +142,26 @@ int main() {
     }
 
     if (FD_ISSET(master_fd, &fds)) {
-      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen + 1);
+      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen - 1);
       if (n > 0) {
         buflen += n;
         buf[buflen] = '\0';
+
         XClearWindow(term.dpy, term.win);
-        XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
-      } else if (n <= 0) {
-        running = 0;
+        XftDrawStringUtf8(term.draw, &term.color, term.font,
+            50, 50, (FcChar8 *)buf, buflen);
+        continue;
       }
+
+      if (n == 0) {
+        // Check if child is still alive
+        if (waitpid(pid, NULL, WNOHANG) != 0) {
+          running = 0;
+        }
+        continue;
+      }
+
+      perror("read");
     }
   }
 
