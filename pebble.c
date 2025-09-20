@@ -2,10 +2,14 @@
 #include <X11/Xlib.h>
 #include <X11/Xft/Xft.h>
 #include <X11/Xutil.h>
+#include <fontconfig/fontconfig.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <sys/select.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <pty.h>
 
@@ -32,7 +36,7 @@ XRenderColor hex_to_xrender_color(const char *hex) {
   if (hex[0] == '#') {
     hex++;
   }
-  
+
   unsigned int r, g, b;
   sscanf(hex, "%2x%2x%2x", &r, &g, &b); 
 
@@ -55,8 +59,8 @@ Terminal create_terminal() {
   term.visual = DefaultVisual(term.dpy, term.scr);
   term.colormap = DefaultColormap(term.dpy, term.scr);
   term.win = XCreateSimpleWindow(term.dpy, DefaultRootWindow(term.dpy),
-            0, 0, 800, 450, 0,
-            BlackPixel(term.dpy, term.scr), 0x1e1e2e);
+      0, 0, 800, 450, 0,
+      BlackPixel(term.dpy, term.scr), 0x1e1e2e);
   XStoreName(term.dpy, term.win, "pebble");
   XSelectInput(term.dpy, term.win, ExposureMask | KeyPressMask);
   XMapWindow(term.dpy, term.win);
@@ -85,53 +89,71 @@ int main() {
   Atom wm_delete = XInternAtom(term.dpy, "WM_DELETE_WINDOW", False);
   XSetWMProtocols(term.dpy, term.win, &wm_delete, 1);
 
+  int master_fd;
+  int pid = forkpty(&master_fd, NULL, NULL, NULL);
+  if (pid == 0) {
+    execlp("/bin/cozsh", "cozsh", NULL);
+    perror("execlp");
+    _exit(1);
+  }
+
   char buf[1024] = "";
   int buflen = 0;
+
   XEvent ev;
   while (running) {
-    XNextEvent(term.dpy, &ev);
-    switch (ev.type) {
-      case Expose:
-        XClearWindow(term.dpy, term.win);
-        XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
-        break;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(master_fd, &fds);
+    int x11_fd = ConnectionNumber(term.dpy);
+    FD_SET(x11_fd, &fds);
+    int maxfd = master_fd > x11_fd ? master_fd : x11_fd;
 
-      case KeyPress:
-        char keybuf[32];
-        KeySym keysym;
-        int len = XLookupString(&ev.xkey, keybuf, sizeof(keybuf) - 1, &keysym, NULL);
-        keybuf[len] = '\0';
+    struct timeval tv = {0, 10000}; // 10ms
+    select(maxfd + 1, &fds, NULL, NULL, &tv);
 
-        // handle backspace
-        if (keysym == XK_BackSpace) {
-          if (buflen >= 0) {
-            buf[buflen] = '\0';
-            buflen--;
-            XClearWindow(term.dpy, term.win);
-            XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
+    while (XPending(term.dpy)) {
+      XNextEvent(term.dpy, &ev);
+      switch (ev.type) {
+        case Expose:
+          XClearWindow(term.dpy, term.win);
+          XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
+          break;
+
+        case KeyPress:
+          char keybuf[32];
+          KeySym keysym;
+          int len = XLookupString(&ev.xkey, keybuf, sizeof(keybuf), &keysym, NULL);
+          keybuf[len] = '\0';
+          if (len > 0) {
+            write(master_fd, keybuf, len);
           }
           break;
-        }
 
-        // avoid buffer overflow
-        if (buflen + len < sizeof(buf)) {
-          strcat(buf, keybuf);
-          buflen += len;
-        }
+          // wm ask to close pebble
+        case ClientMessage:
+          if (ev.xclient.data.l[0] == wm_delete) {
+            running = 0;
+          }
+          break;
+      }
+    }
 
+    if (FD_ISSET(master_fd, &fds)) {
+      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen + 1);
+      if (n > 0) {
+        buflen += n;
+        buf[buflen] = '\0';
         XClearWindow(term.dpy, term.win);
         XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
-        break;
-
-      // wm ask to close pebble
-      case ClientMessage:
-        if (ev.xclient.data.l[0] == wm_delete) {
-          running = 0;
-        }
-        break;
+      } else if (n <= 0) {
+        running = 0;
+      }
     }
   }
 
+  kill(pid, SIGTERM);
+  waitpid(pid, NULL, 0);
   clean_up(&term);
 
   return 0;
