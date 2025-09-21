@@ -2,6 +2,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xft/Xft.h>
 #include <X11/Xutil.h>
+#include <errno.h>
 #include <fontconfig/fontconfig.h>
 #include <signal.h>
 #include <stdio.h>
@@ -161,6 +162,11 @@ int main() {
         if (waitpid(pid, NULL, WNOHANG) != 0) {
           running = 0;
         }
+        continue;
+      }
+
+      if (errno == EIO) {
+        running = 0;
         continue;
       }
 
