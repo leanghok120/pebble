@@ -1,6 +1,6 @@
 CC = gcc
 CFLAGS = -Wall -O2 -I/usr/include/freetype2
-LIBS = -lX11 -lXft
+LIBS = -lX11 -lXft -lvterm
 TARGET = pebble
 SRC = pebble.c
 

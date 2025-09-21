@@ -2,17 +2,16 @@
 #include <X11/Xlib.h>
 #include <X11/Xft/Xft.h>
 #include <X11/Xutil.h>
-#include <errno.h>
 #include <fontconfig/fontconfig.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
+#include <errno.h>
 #include <sys/wait.h>
 #include <sys/select.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <pty.h>
+#include <vterm.h>
 #include "config.h"
 
 typedef struct {
@@ -27,6 +26,12 @@ typedef struct {
 } Terminal;
 
 int running = 1;
+int rows = 24;
+int cols = 80;
+int char_width, char_height;
+
+static VTerm *vt;
+static VTermScreen *vts;
 
 void handle_sigint(int sig) {
   running = 0;
@@ -73,13 +78,41 @@ Terminal create_terminal() {
   XRenderColor xrcolor = hex_to_xrender_color(foreground);
   XftColorAllocValue(term.dpy, term.visual, term.colormap, &xrcolor, &term.color);
 
+  char_height = term.font->ascent + term.font->descent;
+  char_width = term.font->max_advance_width;
+
   return term;
 }
 
 void clean_up(Terminal *term) {
+  XftColorFree(term->dpy, term->visual, term->colormap, &term->color);
   XftDrawDestroy(term->draw);
   XftFontClose(term->dpy, term->font);
   XCloseDisplay(term->dpy);
+}
+
+void draw_screen(Terminal *term) {
+  XClearWindow(term->dpy, term->win);
+
+  for (int r = 0; r < rows; r++) {
+    for (int c = 0; c < cols; c++) {
+      VTermScreenCell cell;
+      VTermPos pos = { r, c };
+      if (vterm_screen_get_cell(vts, pos, &cell)) {
+        if (cell.chars[0]) {
+          char utf8[8];
+          int len = wctomb(utf8, cell.chars[0]);
+          if (len > 0) {
+            XftDrawStringUtf8(term->draw, &term->color, term->font,
+                c * char_width,
+                (r + 1) * char_height,
+                (FcChar8 *)utf8, len);
+          }
+        }
+      }
+    }
+  }
+  XFlush(term->dpy);
 }
 
 int main() {
@@ -91,20 +124,23 @@ int main() {
   Atom wm_delete = XInternAtom(term.dpy, "WM_DELETE_WINDOW", False);
   XSetWMProtocols(term.dpy, term.win, &wm_delete, 1);
 
+  vt = vterm_new(rows, cols);
+  vts = vterm_obtain_screen(vt);
+  vterm_screen_reset(vts, 1);
+
   int master_fd;
-  int pid = forkpty(&master_fd, NULL, NULL, NULL);
+  pid_t pid = forkpty(&master_fd, NULL, NULL, NULL);
+  if (pid == -1) {
+    perror("forkpty");
+    exit(1);
+  }
   if (pid == 0) {
     char *shell = getenv("SHELL");
-    if (shell == NULL) {
-      shell = "/bin/sh";
-    }
-    execlp(shell, shell, NULL);
+    if (!shell) shell = "/bin/sh";
+    execlp(shell, shell, (char *)NULL);
     perror("execlp");
     _exit(1);
   }
-
-  char buf[1024] = "";
-  int buflen = 0;
 
   XEvent ev;
   while (running) {
@@ -115,67 +151,48 @@ int main() {
     FD_SET(x11_fd, &fds);
     int maxfd = master_fd > x11_fd ? master_fd : x11_fd;
 
-    struct timeval tv = {0, 10000}; // 10ms
-    select(maxfd + 1, &fds, NULL, NULL, &tv);
+    if (select(maxfd + 1, &fds, NULL, NULL, NULL) < 0) break;
 
+    // handle x11 events
     while (XPending(term.dpy)) {
       XNextEvent(term.dpy, &ev);
       switch (ev.type) {
         case Expose:
-          XClearWindow(term.dpy, term.win);
-          XftDrawStringUtf8(term.draw, &term.color, term.font, 50, 50, (FcChar8 *)buf, strlen(buf));
+          draw_screen(&term);
           break;
-
-        case KeyPress:
-          char keybuf[32];
-          KeySym keysym;
-          int len = XLookupString(&ev.xkey, keybuf, sizeof(keybuf), &keysym, NULL);
-          keybuf[len] = '\0';
-          if (len > 0) {
-            write(master_fd, keybuf, len);
-          }
-          break;
-
-          // wm ask to close pebble
+        case KeyPress: {
+                         char keybuf[32];
+                         KeySym keysym;
+                         int len = XLookupString(&ev.xkey, keybuf, sizeof(keybuf), &keysym, NULL);
+                         if (len > 0) {
+                           /* TODO: proper keyboard mapping via vterm_keyboard_unichar */
+                           write(master_fd, keybuf, len);
+                         }
+                         break;
+                       }
         case ClientMessage:
-          if (ev.xclient.data.l[0] == wm_delete) {
-            running = 0;
-          }
-          break;
+                       if ((Atom)ev.xclient.data.l[0] == wm_delete) running = 0;
+                       break;
       }
     }
 
+    // handle reading the pty
     if (FD_ISSET(master_fd, &fds)) {
-      int n = read(master_fd, buf + buflen, sizeof(buf) - buflen - 1);
+      char buf[4096];
+      ssize_t n = read(master_fd, buf, sizeof(buf));
       if (n > 0) {
-        buflen += n;
-        buf[buflen] = '\0';
-
-        XClearWindow(term.dpy, term.win);
-        XftDrawStringUtf8(term.draw, &term.color, term.font,
-            50, 50, (FcChar8 *)buf, buflen);
-        continue;
+        vterm_input_write(vt, buf, n);
+        draw_screen(&term);
+      } else if (n == 0) {
+        if (waitpid(pid, NULL, WNOHANG) != 0) running = 0;
+      } else {
+        if (errno == EIO) running = 0;
+        else perror("read");
       }
-
-      if (n == 0) {
-        // Check if child is still alive
-        if (waitpid(pid, NULL, WNOHANG) != 0) {
-          running = 0;
-        }
-        continue;
-      }
-
-      if (errno == EIO) {
-        running = 0;
-        continue;
-      }
-
-      perror("read");
     }
   }
 
   kill(pid, SIGTERM);
   clean_up(&term);
-
   return 0;
 }
